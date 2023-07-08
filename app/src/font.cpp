@@ -14,6 +14,10 @@ struct FontData
 {
     std::vector<msdf_atlas::GlyphGeometry> glyphs{};
     msdf_atlas::FontGeometry geometry{};
+
+    std::uint32_t textureWidth{};
+    std::uint32_t textureHeight{};
+    std::vector<std::uint8_t> textureData{};
 };
 
 template <typename T, typename S, int N, msdf_atlas::GeneratorFunction<S, N> GenFunc>
@@ -21,7 +25,8 @@ static void CreateAndCacheAtlas(float fontSize,
                                 const std::vector<msdf_atlas::GlyphGeometry>& glyphs,
                                 const msdf_atlas::FontGeometry& fontGeometry,
                                 std::uint32_t width,
-                                std::uint32_t height)
+                                std::uint32_t height,
+                                std::vector<T>& outData)
 {
     msdf_atlas::GeneratorAttributes attributes{};
     attributes.config.overlapSupport = true;
@@ -33,11 +38,10 @@ static void CreateAndCacheAtlas(float fontSize,
     generator.generate(glyphs.data(), std::uint32_t(glyphs.size()));
 
     auto bitmap = (msdfgen::BitmapConstRef<T, N>)generator.atlasStorage();
-    // bitmap.width/height
-    // bitmap.pixels
-    // #TODO: Create texture from data
-
     msdfgen::savePng(bitmap, "cached_atlas.png");
+
+    outData.resize(width * height * N);
+    std::memcpy(outData.data(), bitmap.pixels, outData.size());
 }
 
 Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
@@ -119,7 +123,10 @@ Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
         }
     }
 
-    CreateAndCacheAtlas<std::uint8_t, float, 3, msdf_atlas::msdfGenerator>(float(emSize), m_data->glyphs, m_data->geometry, width, height);
+    m_data->textureWidth = width;
+    m_data->textureHeight = height;
+    CreateAndCacheAtlas<std::uint8_t, float, 3, msdf_atlas::msdfGenerator>(
+        float(emSize), m_data->glyphs, m_data->geometry, width, height, m_data->textureData);
 
 #if 0
     msdfgen::Shape shape;
@@ -141,3 +148,23 @@ Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
 }
 
 Font::~Font() = default;
+
+auto Font::get_texture_width() const -> std::uint32_t
+{
+    return m_data->textureWidth;
+}
+
+auto Font::get_texture_height() const -> std::uint32_t
+{
+    return m_data->textureHeight;
+}
+
+auto Font::get_texture_data() const -> const void*
+{
+    return m_data->textureData.data();
+}
+
+void Font::set_texture_id(void* texture)
+{
+    m_textureId = texture;
+}

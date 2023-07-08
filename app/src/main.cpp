@@ -3,6 +3,8 @@
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <glm/glm.hpp>
+#include <glm/ext/matrix_clip_space.hpp>
+#include <glm/gtc/type_ptr.hpp>
 
 #include <format>
 #include <iostream>
@@ -11,14 +13,17 @@ const std::string VertexShaderSource = R"(
 #version 330 core
 #extension GL_ARB_separate_shader_objects : enable
 
-layout (location = 0) in vec3 in_Pos;
-layout (location = 1) in vec3 in_Color;
+layout (location = 0) in vec3 in_position;
+layout (location = 1) in vec2 in_texCoord;
 
-layout (location = 0) out vec3 out_Color;
+layout (location = 0) out vec2 out_texCoord;
 
-void main() {
-    gl_Position = vec4(in_Pos, 1.0);
-    out_Color = in_Color;
+uniform mat4 u_projMatrix;
+
+void main()
+{
+    gl_Position = u_projMatrix * vec4(in_position, 1.0);
+    out_texCoord = in_texCoord;
 }
 )";
 
@@ -26,14 +31,20 @@ const std::string FragmentShaderSource = R"(
 #version 330 core
 #extension GL_ARB_separate_shader_objects : enable
 
-layout(location = 0) in vec3 in_Color;
+layout(location = 0) in vec2 in_texCoord;
 
 layout(location = 0) out vec3 out_fragColor;
 
-void main() {
-    out_fragColor = in_Color;
+uniform sampler2D u_texture;
+
+void main()
+{
+    out_fragColor = texture(u_texture, in_texCoord).rgb;
 }
 )";
+
+const auto WindowWidth = 1280.0f;
+const auto WindowHeight = 720.0f;
 
 template <typename... Args>
 void println(std::string_view fmt, Args&&... args)
@@ -98,13 +109,17 @@ GLuint create_buffers()
     struct Vertex
     {
         glm::vec3 pos;
-        glm::vec3 color;
+        glm::vec2 texCoord;
     };
 
     std::vector<Vertex> vertexData{
-        { { -0.5f, -0.5f, 0.0f }, { 1.0f, 0.0f, 0.0f } },
-        { { 0.5f, -0.5f, 0.0f }, { 0.0f, 1.0f, 0.0f } },
-        { { 0.5f, 0.5f, 0.0f }, { 0.0f, 0.0f, 1.0f } },
+        { { 10.0f, 10.0f, 0.0f }, { 0.0f, 1.0f } },              // TL
+        { { 10.0f, 512 + 10.0f, 0.0f }, { 0.0f, 0.0f } },             // BL
+        { { 512 + 10.0f, 512 + 10.0f, 0.0f }, { 1.0f, 0.0f } },  // BR
+
+        { { 512 + 10.0f, 512 + 10.0f, 0.0f }, { 1.0f, 0.0f } },  // BR
+        { { 512 + 10.0f, 10.0f, 0.0f }, { 1.0f, 1.0f } },        // TR
+        { { 10.0f, 10.0f, 0.0f }, { 0.0f, 1.0f } },              // TL
     };
 
     GLuint vao{};
@@ -118,7 +133,7 @@ GLuint create_buffers()
 
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(offsetof(Vertex, pos)));
     glEnableVertexAttribArray(0);
-    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(offsetof(Vertex, color)));
+    glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(Vertex), (void*)(offsetof(Vertex, texCoord)));
     glEnableVertexAttribArray(1);
 
     return vao;
@@ -168,11 +183,38 @@ GLuint create_shader_program(const std::string& vertexSource, const std::string&
     return shaderProgram;
 }
 
-void render(GLuint program, GLuint vao)
+GLuint create_texture_2d(std::uint32_t width, std::uint32_t height, const void* data, GLenum format, bool generateMipMaps)
 {
+    GLuint texture{};
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+
+    const int mipMapLevel = 0;
+    const GLenum sourceFormat = format;
+    const GLenum sourceDataType = GL_UNSIGNED_BYTE;
+    glTexImage2D(GL_TEXTURE_2D, mipMapLevel, sourceFormat, width, height, 0, sourceFormat, sourceDataType, data);
+    if (generateMipMaps)
+    {
+        glGenerateMipmap(GL_TEXTURE_2D);
+    }
+
+    return texture;
+}
+
+void render(GLuint program, GLuint vao, GLuint texture)
+{
+    glm::mat4 projMatrix = glm::ortho(0.0f, WindowWidth, WindowHeight, 0.0f);
+
     glUseProgram(program);
+    glBindTexture(GL_TEXTURE_2D, texture);
     glBindVertexArray(vao);
-    glDrawArrays(GL_TRIANGLES, 0, 3);
+    glUniformMatrix4fv(glGetUniformLocation(program, "u_projMatrix"), 1, GL_FALSE, glm::value_ptr(projMatrix));
+    glDrawArrays(GL_TRIANGLES, 0, 6);
 }
 
 void cleanup(GLFWwindow* window)
@@ -185,12 +227,15 @@ int main(int argc, char** argv)
 {
     std::cout << "MSDF Text Rendering\n";
 
+    auto* window = initialise(WindowWidth, WindowHeight, "MSDF Text Rendering");
+    auto program = create_shader_program(VertexShaderSource, FragmentShaderSource);
+    auto vao = create_buffers();
+
     Font font("fonts/OpenSans-Regular.ttf");
     //    Font font2("fonts/segoesc.ttf");
 
-    auto* window = initialise(1280, 720, "MSDF Text Rendering");
-    auto program = create_shader_program(VertexShaderSource, FragmentShaderSource);
-    auto vao = create_buffers();
+    auto texture = create_texture_2d(font.get_texture_width(), font.get_texture_height(), font.get_texture_data(), GL_RGB, false);
+    font.set_texture_id(&texture);
 
     while (!glfwWindowShouldClose(window))
     {
@@ -198,7 +243,7 @@ int main(int argc, char** argv)
 
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-        render(program, vao);
+        render(program, vao, texture);
 
         glfwSwapBuffers(window);
     }
