@@ -1,24 +1,11 @@
 #include "font.hpp"
 
-#include <msdf-atlas-gen.h>
-#include <FontGeometry.h>
-
 #include <cassert>
 
 #define DEFAULT_ANGLE_THRESHOLD 3
 #define LCG_MULTIPLIER 6364136223846793005ull
 #define LCG_INCREMENT 1442695040888963407ul
 #define THREAD_COUNT 8
-
-struct FontData
-{
-    std::vector<msdf_atlas::GlyphGeometry> glyphs{};
-    msdf_atlas::FontGeometry geometry{};
-
-    std::uint32_t textureWidth{};
-    std::uint32_t textureHeight{};
-    std::vector<std::uint8_t> textureData{};
-};
 
 template <typename T, typename S, int N, msdf_atlas::GeneratorFunction<S, N> GenFunc>
 static void CreateAndCacheAtlas(float fontSize,
@@ -82,13 +69,14 @@ Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
     auto glyphsLoaded = m_data->geometry.loadCharset(font, fontScale, charset);
     (void)(glyphsLoaded);  // `charset.size() - glyphsLoaded` glyphs were loaded
 
-    double emSize = 40.0;
+    double emSize = 32.0;
+    double pixelRange = 2;  // 2.5 + 1.0 / 0.1;//8.0; // Shader should use this value
 
     msdf_atlas::TightAtlasPacker atlasPacker{};
     // atlasPacker.setDimensionsConstraint();
-    atlasPacker.setPixelRange(2.0);
+    atlasPacker.setPixelRange(pixelRange);
     atlasPacker.setMiterLimit(1.0);
-    atlasPacker.setPadding(0);
+    atlasPacker.setPadding(1);
     atlasPacker.setScale(emSize);
     int remaining = atlasPacker.pack(m_data->glyphs.data(), std::int32_t(m_data->glyphs.size()));
     assert(remaining == 0);
@@ -100,7 +88,7 @@ Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
 
     // if MSDF || MTSDF
     std::uint64_t coloringSeed = 0;
-    bool expensiveColoring = false;
+    bool expensiveColoring = true;
     if (expensiveColoring)
     {
         msdf_atlas::Workload(
@@ -119,7 +107,7 @@ Font::Font(const std::filesystem::path& fontFilename) : m_data(new FontData)
         for (msdf_atlas::GlyphGeometry& glyph : m_data->glyphs)
         {
             glyphSeed *= LCG_MULTIPLIER;
-            glyph.edgeColoring(msdfgen::edgeColoringInkTrap, DEFAULT_ANGLE_THRESHOLD, glyphSeed);
+            glyph.edgeColoring(msdfgen::edgeColoringByDistance, DEFAULT_ANGLE_THRESHOLD, glyphSeed);
         }
     }
 
@@ -167,4 +155,9 @@ auto Font::get_texture_data() const -> const void*
 void Font::set_texture_id(void* texture)
 {
     m_textureId = texture;
+}
+
+auto Font::get_geometry() const -> const msdf_atlas::FontGeometry&
+{
+    return m_data->geometry;
 }
